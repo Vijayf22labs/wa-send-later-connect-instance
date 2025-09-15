@@ -1,4 +1,4 @@
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
 require('dotenv').config();
 
 async function restartF22LabsApp() {
@@ -35,7 +35,15 @@ async function restartF22LabsApp() {
     const browser = await puppeteer.launch({ 
         headless: false, // Set to true for production
         defaultViewport: null,
-        args: ['--start-maximized']
+        executablePath: '/usr/bin/chromium',
+        args: [
+            '--start-maximized',
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-web-security',
+            '--disable-features=VizDisplayCompositor'
+        ]
     });
 
     let page;
@@ -88,9 +96,27 @@ async function restartF22LabsApp() {
         console.log('🔍 Looking for restart button...');
         await page.waitForSelector('button[aria-label="restart"]', { timeout: 15000 });
         
-        // Click the restart button
+        // Scroll the restart button into view and ensure it's clickable
+        console.log('📜 Scrolling restart button into view...');
+        const restartButton = await page.$('button[aria-label="restart"]');
+        await restartButton.scrollIntoView();
+        
+        // Wait a bit for any animations/loading to complete
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Try multiple click methods to ensure it works
         console.log('🔄 Clicking restart button...');
-        await page.click('button[aria-label="restart"]');
+        try {
+            // First try: Regular click
+            await page.click('button[aria-label="restart"]');
+        } catch (error) {
+            console.log('⚠️ Regular click failed, trying JavaScript click...');
+            // Fallback: JavaScript click
+            await page.evaluate(() => {
+                const button = document.querySelector('button[aria-label="restart"]');
+                if (button) button.click();
+            });
+        }
         
         // Wait a moment to ensure the action is processed
         await new Promise(resolve => setTimeout(resolve, 3000));
