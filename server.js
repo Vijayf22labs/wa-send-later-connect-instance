@@ -1,6 +1,8 @@
 const express = require('express');
 const axios = require('axios');
 const cron = require('node-cron');
+const swaggerJsdoc = require('swagger-jsdoc');
+const swaggerUi = require('swagger-ui-express');
 require('dotenv').config();
 
 const app = express();
@@ -8,8 +10,150 @@ const PORT = process.env.PORT;
 const CODECHAT_URL = process.env.CODECHAT_URL;
 const API_KEY = process.env.API_KEY;
 
+// Swagger configuration
+const swaggerOptions = {
+    definition: {
+        openapi: '3.0.0',
+        info: {
+            title: 'WhatsApp Instance Monitor API',
+            version: '1.0.0',
+            description: 'API for monitoring and managing WhatsApp instances with automatic reconnection functionality',
+            contact: {
+                name: 'API Support',
+                email: 'support@example.com'
+            }
+        },
+        servers: [
+            {
+                url: process.env.NODE_ENV === 'production' 
+                    ? 'https://your-production-domain.com' 
+                    : `http://localhost:${process.env.PORT || 3000}`,
+                description: process.env.NODE_ENV === 'production' ? 'Production server' : 'Development server'
+            }
+        ],
+        components: {
+            schemas: {
+                Instance: {
+                    type: 'object',
+                    properties: {
+                        id: { type: 'string', description: 'Unique instance identifier' },
+                        name: { type: 'string', description: 'Instance name' },
+                        connectionStatus: { 
+                            type: 'string', 
+                            enum: ['ONLINE', 'OFFLINE'], 
+                            description: 'Instance connection status' 
+                        },
+                        whatsappState: { 
+                            type: 'string', 
+                            description: 'WhatsApp connection state' 
+                        },
+                        Auth: {
+                            type: 'object',
+                            properties: {
+                                token: { type: 'string', description: 'Authentication token' }
+                            }
+                        }
+                    }
+                },
+                Statistics: {
+                    type: 'object',
+                    properties: {
+                        totalInstances: { type: 'integer', description: 'Total number of instances' },
+                        onlineInstances: { type: 'integer', description: 'Number of online instances' },
+                        openConnections: { type: 'integer', description: 'Number of open WhatsApp connections' },
+                        closedConnections: { type: 'integer', description: 'Number of closed WhatsApp connections' },
+                        reconnected: { type: 'integer', description: 'Number of instances reconnected' }
+                    }
+                },
+                ApiResponse: {
+                    type: 'object',
+                    properties: {
+                        success: { type: 'boolean', description: 'Request success status' },
+                        message: { type: 'string', description: 'Response message' },
+                        timestamp: { type: 'string', format: 'date-time', description: 'Response timestamp' }
+                    }
+                },
+                ErrorResponse: {
+                    type: 'object',
+                    properties: {
+                        success: { type: 'boolean', example: false },
+                        message: { type: 'string', description: 'Error message' },
+                        error: { type: 'string', description: 'Detailed error information' },
+                        timestamp: { type: 'string', format: 'date-time' }
+                    }
+                }
+            }
+        }
+    },
+    apis: ['./server.js']
+};
+
+const specs = swaggerJsdoc(swaggerOptions);
+
 // Middleware
 app.use(express.json());
+
+// Swagger UI
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs, {
+    explorer: true,
+    customCss: '.swagger-ui .topbar { display: none }',
+    customSiteTitle: 'WhatsApp Instance Monitor API'
+}));
+
+/**
+ * @swagger
+ * /:
+ *   get:
+ *     summary: API Root
+ *     description: Root endpoint that provides API information and links to documentation
+ *     tags: [System]
+ *     responses:
+ *       200:
+ *         description: API information
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 name:
+ *                   type: string
+ *                   example: "WhatsApp Instance Monitor API"
+ *                 version:
+ *                   type: string
+ *                   example: "1.0.0"
+ *                 description:
+ *                   type: string
+ *                   example: "API for monitoring and managing WhatsApp instances"
+ *                 documentation:
+ *                   type: string
+ *                   example: "/api-docs"
+ *                 endpoints:
+ *                   type: object
+ *                   description: Available API endpoints
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ */
+app.get('/', (req, res) => {
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    
+    res.status(200).json({
+        name: 'WhatsApp Instance Monitor API',
+        version: '1.0.0',
+        description: 'API for monitoring and managing WhatsApp instances with automatic reconnection functionality',
+        documentation: `${baseUrl}/api-docs`,
+        endpoints: {
+            monitor: {
+                checkAll: 'GET /check-instances',
+                checkOne: 'GET /check-individual-instance/{instanceId}'
+            },
+            system: {
+                health: 'GET /health'
+            }
+        },
+        timestamp: new Date().toISOString()
+    });
+});
 
 // Function to fetch all instances or specific instance
 async function fetchInstances(instanceId) {
@@ -188,7 +332,41 @@ cron.schedule('0 */45 * * * *', () => {
     checkAndReconnectInstances();
 });
 
-// Manual trigger endpoint for testing
+
+
+/**
+ * @swagger
+ * /check-instances:
+ *   get:
+ *     summary: Check and reconnect all instances (Legacy endpoint)
+ *     description: Manually trigger a check of all instances and reconnect any with closed connections
+ *     tags: [Monitor]
+ *     responses:
+ *       200:
+ *         description: Successfully completed instance check
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Instance check completed"
+ *                 statistics:
+ *                   $ref: '#/components/schemas/Statistics'
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 app.get('/check-instances', async (req, res) => {
     try {
         const result = await checkAndReconnectInstances();
@@ -206,6 +384,70 @@ app.get('/check-instances', async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /check-individual-instance/{instanceId}:
+ *   get:
+ *     summary: Check individual instance (Legacy endpoint)
+ *     description: Check and potentially reconnect a specific instance
+ *     tags: [Monitor]
+ *     parameters:
+ *       - in: path
+ *         name: instanceId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Instance ID
+ *     responses:
+ *       200:
+ *         description: Successfully checked instance
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                 instance:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     name:
+ *                       type: string
+ *                     connectionStatus:
+ *                       type: string
+ *                     whatsappState:
+ *                       type: string
+ *                     needsReconnection:
+ *                       type: boolean
+ *                     reconnected:
+ *                       type: boolean
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *       400:
+ *         description: Bad request (instance not online)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: Instance not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 app.get('/check-individual-instance/:instanceId', async (req, res) => {
     try {
         const { instanceId } = req.params;
@@ -308,7 +550,32 @@ app.get('/check-individual-instance/:instanceId', async (req, res) => {
     }
 });
 
-// Health check endpoint
+
+/**
+ * @swagger
+ * /health:
+ *   get:
+ *     summary: Health check
+ *     description: Check if the WhatsApp Instance Monitor service is running
+ *     tags: [System]
+ *     responses:
+ *       200:
+ *         description: Service is healthy
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "OK"
+ *                 message:
+ *                   type: string
+ *                   example: "WhatsApp Instance Monitor is running"
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ */
 app.get('/health', (req, res) => {
     res.status(200).json({ 
         status: 'OK', 

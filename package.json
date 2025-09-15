@@ -5,6 +5,12 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "restart-app": "node restart-app.js",
+    "health": "node health.js",
+    "monitor": "node health-monitor.js",
+    "start-with-monitor": "concurrently \"npm run start\" \"npm run monitor\"",
+    "dev-with-monitor": "concurrently \"npm run dev\" \"npm run monitor\"",
+    "all": "concurrently \"npm run start\" \"npm run monitor\" --names \"SERVER,MONITOR\" --prefix-colors \"blue,green\"",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -13,9 +19,13 @@
   "description": "",
   "dependencies": {
     "axios": "^1.12.2",
+    "concurrently": "^9.2.1",
     "dotenv": "^17.2.2",
     "express": "^5.1.0",
-    "node-cron": "^4.2.1"
+    "node-cron": "^4.2.1",
+    "puppeteer": "^24.20.0",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"
