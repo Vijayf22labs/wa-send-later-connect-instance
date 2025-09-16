@@ -9,6 +9,10 @@ const app = express();
 const PORT = process.env.PORT;
 const CODECHAT_URL = process.env.CODECHAT_URL;
 const API_KEY = process.env.API_KEY;
+const DELAY_MS = parseInt(process.env.DELAY_MS); 
+
+// Utility function to add delay
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Swagger configuration
 const swaggerOptions = {
@@ -260,7 +264,8 @@ async function checkAndReconnectInstances() {
         let reconnectedCount = 0;
         
         // Check each online instance
-        for (const instance of onlineInstances) {
+        for (let i = 0; i < onlineInstances.length; i++) {
+            const instance = onlineInstances[i];
             const { name, Auth } = instance;
             const token = Auth.token;
             
@@ -287,6 +292,12 @@ async function checkAndReconnectInstances() {
                 
             } catch (error) {
                 console.error(`Failed to process instance ${name}:`, error.message);
+            }
+            
+            // Add delay between calls (except for the last instance)
+            if (i < onlineInstances.length - 1) {
+                console.log(`Waiting ${DELAY_MS}ms before checking next instance...`);
+                await delay(DELAY_MS);
             }
         }
         
