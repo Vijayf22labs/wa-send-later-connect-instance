@@ -4,7 +4,7 @@ const cron = require('node-cron');
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
 const cors = require('cors');
-const mongoose = require('mongoose');
+const connectDb = require('./config/connectDb')
 const statsRouter = require('./routes/instance')
 require('dotenv').config();
 
@@ -101,15 +101,6 @@ const specs = swaggerJsdoc(swaggerOptions);
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI)
-.then(() => {
-  console.log('Connected to MongoDB');
-})
-.catch((error) => {
-  console.error('MongoDB connection error:', error);
-});
 
 // Swagger UI
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs, {
@@ -612,8 +603,18 @@ app.get('/health', (req, res) => {
 app.use('/api/stats', statsRouter)
 
 // Start server
-app.listen(PORT, () => {
-    console.log(`WhatsApp Instance Monitor running on port ${PORT}`);
-});
+async function startServer(){
+    try{
+        await connectDb() 
+        app.listen(PORT, () => {
+            console.log(`WhatsApp Instance Monitor running on port ${PORT}`);
+        });
+    }
+    catch(err){
+        console.log(`Error in starting Server - ${err.message}`)
+    }
+}
+
+startServer()
 
 module.exports = app;
