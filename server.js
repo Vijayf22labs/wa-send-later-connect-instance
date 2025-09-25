@@ -3,13 +3,16 @@ const axios = require('axios');
 const cron = require('node-cron');
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
+const cors = require('cors');
+const mongoose = require('mongoose');
+const statsRouter = require('./routes/instance')
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT;
 const CODECHAT_URL = process.env.CODECHAT_URL;
 const API_KEY = process.env.API_KEY;
-const DELAY_MS = parseInt(process.env.DELAY_MS); 
+const DELAY_MS = parseInt(process.env.DELAY_MS);
 
 // Utility function to add delay
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -95,7 +98,18 @@ const swaggerOptions = {
 const specs = swaggerJsdoc(swaggerOptions);
 
 // Middleware
+app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Connect to MongoDB
+mongoose.connect(process.env.MONGODB_URI)
+.then(() => {
+  console.log('Connected to MongoDB');
+})
+.catch((error) => {
+  console.error('MongoDB connection error:', error);
+});
 
 // Swagger UI
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs, {
@@ -594,6 +608,8 @@ app.get('/health', (req, res) => {
         message: 'WhatsApp Instance Monitor is running'
     });
 });
+
+app.use('/api/stats', statsRouter)
 
 // Start server
 app.listen(PORT, () => {

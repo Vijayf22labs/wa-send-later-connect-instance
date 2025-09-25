@@ -17,7 +17,7 @@ class HealthMonitor {
             slackWebhook: process.env.SLACK_WEBHOOK_URL,
             deploymentUrl: process.env.DEPLOYMENT_URL,
             env: process.env.ENV || 'dev',
-            checkInterval: 30000, // 30 seconds
+            checkInterval: 120000, // 2 minutes
             restartCooldown: 300000, // 5 minutes cooldown between restart attempts
             maxRetries: 2 // Maximum restart attempts before requiring manual intervention
         };
