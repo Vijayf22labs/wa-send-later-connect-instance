@@ -167,11 +167,11 @@ class HealthMonitor {
             );
 
             try {
-                await restartF22LabsApp();
+                // await restartF22LabsApp(); // COMMENTED OUT - Restart automation disabled
                 this.restartAttempted = true;
                 this.lastRestartTime = Date.now();
                 
-                console.log('✅ Restart automation completed, waiting 1 minute for recovery...');
+                console.log('⚠️ Restart automation is disabled - skipping actual restart');
                 
                 // Wait 1 minute then check if service recovered
                 setTimeout(async () => {
