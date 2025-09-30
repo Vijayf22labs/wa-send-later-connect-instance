@@ -17,7 +17,7 @@ class HealthMonitor {
             slackWebhook: process.env.SLACK_WEBHOOK_URL,
             deploymentUrl: process.env.DEPLOYMENT_URL,
             env: process.env.ENV || 'dev',
-            checkInterval: 120000, // 2 minutes
+            checkInterval: parseInt(process.env.HEALTH_CHECK_INTERVAL_MS) || 120000, // Default 2 minutes
             restartCooldown: 300000, // 5 minutes cooldown between restart attempts
             maxRetries: 2 // Maximum restart attempts before requiring manual intervention
         };
@@ -167,7 +167,7 @@ class HealthMonitor {
             );
 
             try {
-                // await restartF22LabsApp(); // COMMENTED OUT - Restart automation disabled
+                await restartF22LabsApp();
                 this.restartAttempted = true;
                 this.lastRestartTime = Date.now();
                 
