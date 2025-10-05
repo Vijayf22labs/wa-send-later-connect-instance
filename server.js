@@ -169,7 +169,7 @@ async function fetchInstances(instanceId) {
     try {
         if(instanceId){
             console.log(`Fetching particular instance: ${instanceId}`);
-            const response = await axios.get(`${CODECHAT_URL}/instance/fetchInstances/${instanceId}`, {
+            const response = await axios.get(`${CODECHAT_URL}/instance/fetchInstances?instanceName=${instanceId}`, {
                 headers: {
                     'accept': 'application/json',
                     'apikey': API_KEY
