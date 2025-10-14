@@ -343,10 +343,14 @@ async function checkAndReconnectInstances() {
     }
 }
 
-// Schedule cron job to run every 45 minutes
-cron.schedule('0 */45 * * * *', () => {
-    checkAndReconnectInstances();
-});
+// Schedule cron job to run every 45 minutes (only if CRON_START is true)
+if (process.env.CRON_START === 'true') {
+    cron.schedule('0 */45 * * * *', () => {
+        checkAndReconnectInstances();
+    });
+} else {
+    console.log('Cron job disabled - set CRON_START=true in environment to enable');
+}
 
 
 
