@@ -172,7 +172,7 @@ async function fetchInstances(instanceId) {
             const response = await axios.get(`${CODECHAT_URL}/instance/fetchInstances?instanceName=${instanceId}`, {
                 headers: {
                     'accept': 'application/json',
-                    'apikey': API_KEY
+                    'apiKey': API_KEY
                 }
             });
 
@@ -184,7 +184,7 @@ async function fetchInstances(instanceId) {
         const response = await axios.get(`${CODECHAT_URL}/instance/fetchInstances`, {
             headers: {
                 'accept': 'application/json',
-                'apikey': API_KEY
+                'apiKey': API_KEY
             }
         });
         
@@ -203,6 +203,7 @@ async function fetchInstanceDetails(instanceName, token) {
         const response = await axios.get(`${CODECHAT_URL}/instance/fetchInstance/${instanceName}`, {
             headers: {
                 'accept': 'application/json',
+                'apiKey': API_KEY,
                 'Authorization': `Bearer ${token}`
             }
         });
@@ -221,6 +222,7 @@ async function connectInstance(instanceName, token) {
         const response = await axios.get(`${CODECHAT_URL}/instance/connect/${instanceName}`, {
             headers: {
                 'accept': 'application/json',
+                'apiKey': API_KEY,
                 'Authorization': `Bearer ${token}`
             }
         });
