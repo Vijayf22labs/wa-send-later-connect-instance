@@ -235,6 +235,26 @@ async function connectInstance(instanceName, token) {
     }
 }
 
+// Function to logout an instance
+async function logoutInstance(instanceName, token) {
+    try {
+        console.log(`Logging out instance: ${instanceName}`);
+        await axios.delete(`${CODECHAT_URL}/instance/logout/${encodeURIComponent(instanceName)}`, {
+            headers: {
+                'accept': 'application/json',
+                'apiKey': API_KEY,
+                'Authorization': `Bearer ${token}`
+            }
+        });
+        
+        console.log(`Successfully logged out instance: ${instanceName}`);
+        return { success: true };
+    } catch (error) {
+        console.error(`Error logging out instance ${instanceName}:`, error.message);
+        throw error;
+    }
+}
+
 // Main function to check and reconnect instances
 async function checkAndReconnectInstances() {
     try {
@@ -288,7 +308,19 @@ async function checkAndReconnectInstances() {
                     console.log(`Instance ${name} has closed WhatsApp connection. Attempting to reconnect...`);
                     
                     // Attempt to reconnect
-                    await connectInstance(name, token);
+                    const connectResponse = await connectInstance(name, token);
+                    
+                    // Check if response contains base64 field (QR code scenario)
+                    if (connectResponse && connectResponse.base64) {
+                        console.log(`Instance ${name} connection returned QR code. Logging out instance...`);
+                        try {
+                            await logoutInstance(name, token);
+                            console.log(`Instance ${name} has been logged out due to QR code requirement`);
+                        } catch (logoutError) {
+                            console.error(`Failed to logout instance ${name}:`, logoutError.message);
+                        }
+                    }
+                    
                     closedCount++;
                     reconnectedCount++;
                     
@@ -534,10 +566,29 @@ app.get('/check-individual-instance/:instanceId', async (req, res) => {
             
             try {
                 // Attempt to reconnect
-                await connectInstance(name, token);
-                response.message = 'Instance was disconnected and has been reconnected';
-                response.instance.needsReconnection = true;
-                response.instance.reconnected = true;
+                const connectResponse = await connectInstance(name, token);
+                
+                // Check if response contains base64 field (QR code scenario)
+                if (connectResponse && connectResponse.base64) {
+                    console.log(`Instance ${name} connection returned QR code. Logging out instance...`);
+                    try {
+                        await logoutInstance(name, token);
+                        response.message = 'Instance was disconnected and logged out due to QR code requirement';
+                        response.instance.needsReconnection = true;
+                        response.instance.reconnected = false;
+                        response.instance.loggedOut = true;
+                    } catch (logoutError) {
+                        console.error(`Failed to logout instance ${name}:`, logoutError.message);
+                        response.message = 'Instance reconnection returned QR code, but logout failed';
+                        response.instance.needsReconnection = true;
+                        response.instance.reconnected = false;
+                        response.error = logoutError.message;
+                    }
+                } else {
+                    response.message = 'Instance was disconnected and has been reconnected';
+                    response.instance.needsReconnection = true;
+                    response.instance.reconnected = true;
+                }
             } catch (reconnectError) {
                 console.error(`Failed to reconnect instance ${name}:`, reconnectError.message);
                 response.message = 'Instance was disconnected but reconnection failed';
@@ -607,6 +658,112 @@ app.get('/health', (req, res) => {
 });
 
 app.use('/api/stats', statsRouter)
+
+// Logout all users across online instances
+app.delete('/logout-all-instances', async (req, res) => {
+    try {
+        const instances = await fetchInstances();
+
+        const results = [];
+
+        for (const instance of instances) {
+            const { name, connectionStatus, Auth } = instance;
+            const token = Auth && Auth.token;
+
+            if (connectionStatus !== 'ONLINE' || !token) {
+                results.push({ name, status: 'skipped', reason: connectionStatus !== 'ONLINE' ? 'not online' : 'missing token' });
+                continue;
+            }
+
+            try {
+                await axios.delete(`${CODECHAT_URL}/instance/logout/${encodeURIComponent(name)}`, {
+                    headers: {
+                        'accept': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                results.push({ name, status: 'success' });
+            } catch (err) {
+                results.push({ name, status: 'failed', error: err.response?.data || err.message });
+            }
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Logout attempted for all online instances',
+            results,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to logout all instances',
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+// Logout a single user by instance name
+app.delete('/logout-individual-user/:instanceId', async (req, res) => {
+    try {
+        const { instanceId } = req.params;
+
+        if (!instanceId) {
+            return res.status(400).json({
+                success: false,
+                message: 'instanceId is required in path params'
+            });
+        }
+
+        const instances = await fetchInstances(instanceId);
+        const instance = instances && instances[0];
+
+        if (!instance) {
+            return res.status(404).json({
+                success: false,
+                message: `Instance ${instanceId} not found`
+            });
+        }
+
+        const { name, connectionStatus, Auth } = instance;
+        const token = Auth && Auth.token;
+
+        if (connectionStatus !== 'ONLINE') {
+            return res.status(400).json({
+                success: false,
+                message: `Instance ${name} is not online (status: ${connectionStatus})`
+            });
+        }
+
+        if (!token) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing token for the instance'
+            });
+        }
+
+        await axios.delete(`${CODECHAT_URL}/instance/logout/${encodeURIComponent(name)}`, {
+            headers: {
+                'accept': 'application/json',
+                'Authorization': `Bearer ${token}`
+            }
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: `Logout triggered for instance ${name}`,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to logout individual instance',
+            error: error.response?.data || error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
 
 // Start server
 async function startServer(){

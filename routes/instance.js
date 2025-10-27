@@ -67,7 +67,7 @@ router.get('/instance', async (req, res) => {
           `${process.env.CODECHAT_URL}/instance/fetchInstance/${finalInstanceId}`,
           {
             headers: {
-              'apiKey': process.env.CODECHAT_URL,
+              'apiKey': process.env.API_KEY,
               'Authorization': `Bearer ${token}`
             }
           }
