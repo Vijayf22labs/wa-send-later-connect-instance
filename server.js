@@ -6,6 +6,7 @@ const swaggerUi = require('swagger-ui-express');
 const cors = require('cors');
 const connectDb = require('./config/connectDb')
 const statsRouter = require('./routes/instance')
+const User = require('./models/User')
 require('dotenv').config();
 
 const app = express();
@@ -255,6 +256,26 @@ async function logoutInstance(instanceName, token) {
     }
 }
 
+// Function to mark instance offline in MongoDB
+async function markInstanceOffline(instanceName) {
+    if (!instanceName) return;
+    try {
+        const updateResult = await User.findOneAndUpdate(
+            { instance_id: instanceName },
+            { $set: { status: 'OFFLINE' } }
+        );
+
+        if (updateResult.matchedCount === 0) {
+            console.warn(`No Mongo user found for instance ${instanceName} to mark offline`);
+        } else {
+            console.log(`Instance ${instanceName} marked OFFLINE in MongoDB (modified: ${updateResult.modifiedCount})`);
+        }
+        return { success: true, status: updateResult.status };
+    } catch (mongoError) {
+        console.error(`Failed to mark instance ${instanceName} offline in MongoDB:`, mongoError.message);
+    }
+}
+
 // Main function to check and reconnect instances
 async function checkAndReconnectInstances() {
     try {
@@ -280,7 +301,8 @@ async function checkAndReconnectInstances() {
                     onlineInstances: 0,
                     openConnections: 0,
                     closedConnections: 0,
-                    reconnected: 0
+                    reconnected: 0,
+                    loggedOut: 0
                 }
             };
         }
@@ -289,6 +311,7 @@ async function checkAndReconnectInstances() {
         let openCount = 0;
         let closedCount = 0;
         let reconnectedCount = 0;
+        let loggedOutCount = 0;
         
         // Check each online instance
         for (let i = 0; i < onlineInstances.length; i++) {
@@ -299,6 +322,26 @@ async function checkAndReconnectInstances() {
             try {
                 // Fetch instance details to check WhatsApp connection state
                 const instanceDetails = await fetchInstanceDetails(name, token);
+                
+                // Get Bailey status
+                const baileyStatus = instanceDetails.Whatsapp?.connection?.state || null;
+                
+                // Check if Bailey status is null
+                if (baileyStatus === null) {
+                    console.log(`Instance ${name} has Codechat ONLINE but Bailey status is null. Connecting and logging out...`);
+                    
+                    try {
+                        await connectInstance(name, token);
+                        await logoutInstance(name, token);
+                        await markInstanceOffline(name);
+                        
+                        console.log(`Instance ${name} has been connected and logged out due to null Bailey status`);
+                        loggedOutCount++;
+                    } catch (connectLogoutError) {
+                        console.error(`Failed to connect/logout instance ${name}:`, connectLogoutError.message);
+                    }
+                    continue; // Skip to next instance
+                }
                 
                 // Check if WhatsApp connection state is closed
                 if (instanceDetails.Whatsapp && 
@@ -315,6 +358,7 @@ async function checkAndReconnectInstances() {
                         console.log(`Instance ${name} connection returned QR code. Logging out instance...`);
                         try {
                             await logoutInstance(name, token);
+                            await markInstanceOffline(name);
                             console.log(`Instance ${name} has been logged out due to QR code requirement`);
                         } catch (logoutError) {
                             console.error(`Failed to logout instance ${name}:`, logoutError.message);
@@ -330,7 +374,29 @@ async function checkAndReconnectInstances() {
                 }
                 
             } catch (error) {
-                console.error(`Failed to process instance ${name}:`, error.message);
+                const statusCode = error.response?.status;
+                const errorMessage = error.response?.data?.message;
+                const normalizedMessages = Array.isArray(errorMessage) ? errorMessage : [errorMessage].filter(Boolean);
+                const instanceMissing = statusCode === 400 && normalizedMessages.some(msg => 
+                    typeof msg === 'string' && msg.includes('does not exist or is not connected')
+                );
+
+                if (instanceMissing || (instance.connectionStatus === 'ONLINE')) {
+                    console.log(`Instance ${name} is ONLINE but fetchInstanceDetails failed. Connecting and logging out...`);
+                    
+                    try {
+                        await connectInstance(name, token);
+                        await logoutInstance(name, token);
+                        await markInstanceOffline(name);
+                        
+                        console.log(`Instance ${name} has been connected and logged out after fetchInstanceDetails error`);
+                        loggedOutCount++;
+                    } catch (connectLogoutError) {
+                        console.error(`Failed to connect/logout instance ${name} after error:`, connectLogoutError.message);
+                    }
+                } else {
+                    console.error(`Failed to process instance ${name}:`, error.message);
+                }
             }
             
             // Add delay between calls (except for the last instance)
@@ -346,6 +412,7 @@ async function checkAndReconnectInstances() {
         console.log(`Open connections: ${openCount}`);
         console.log(`Closed connections: ${closedCount}`);
         console.log(`Reconnected: ${reconnectedCount}`);
+        console.log(`Logged out (null Bailey/errors): ${loggedOutCount}`);
         
         // Return statistics for API responses
         return {
@@ -356,7 +423,8 @@ async function checkAndReconnectInstances() {
                 onlineInstances: onlineInstances.length,
                 openConnections: openCount,
                 closedConnections: closedCount,
-                reconnected: reconnectedCount
+                reconnected: reconnectedCount,
+                loggedOut: loggedOutCount
             }
         };
         
@@ -371,7 +439,8 @@ async function checkAndReconnectInstances() {
                 onlineInstances: 0,
                 openConnections: 0,
                 closedConnections: 0,
-                reconnected: 0
+                reconnected: 0,
+                loggedOut: 0
             }
         };
     }
@@ -660,110 +729,325 @@ app.get('/health', (req, res) => {
 app.use('/api/stats', statsRouter)
 
 // Logout all users across online instances
-app.delete('/logout-all-instances', async (req, res) => {
+app.post('/logout-all-instances', async (req, res) => {
     try {
-        const instances = await fetchInstances();
+        // Step 1: Fetch all instances from Codechat API
+        const instancesResponse = await fetchInstances();
 
+        if (!instancesResponse.data || instancesResponse.data.length === 0) {
+            return res.status(200).json({
+                success: true,
+                message: 'No instances found',
+                results: [],
+                statistics: {
+                    totalInstances: 0,
+                    onlineInstances: 0,
+                    nullBaileyInstances: 0,
+                    processed: 0,
+                    success: 0,
+                    failed: 0
+                },
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        const codechatInstances = Array.isArray(instancesResponse.data) 
+            ? instancesResponse.data 
+            : [instancesResponse.data];
+
+        // Step 2: Filter ONLINE instances and check Bailey status
+        const onlineInstances = codechatInstances.filter(
+            instance => instance.connectionStatus === 'ONLINE'
+        );
+
+        const instancesToProcess = [];
         const results = [];
 
-        for (const instance of instances) {
-            const { name, connectionStatus, Auth } = instance;
-            const token = Auth && Auth.token;
+        // Step 3: Check Bailey status for each ONLINE instance
+        for (const instance of onlineInstances) {
+            const instanceId = instance.name || instance.id;
+            const token = instance.Auth?.token;
 
-            if (connectionStatus !== 'ONLINE' || !token) {
-                results.push({ name, status: 'skipped', reason: connectionStatus !== 'ONLINE' ? 'not online' : 'missing token' });
+            if (!token) {
+                results.push({
+                    instance_id: instanceId,
+                    status: 'skipped',
+                    reason: 'Missing token'
+                });
                 continue;
             }
 
+            let baileyStatus = null;
+
             try {
-                await axios.delete(`${CODECHAT_URL}/instance/logout/${encodeURIComponent(name)}`, {
-                    headers: {
-                        'accept': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                    }
+                const detailedResponse = await fetchInstanceDetails(instanceId, token);
+
+                baileyStatus = detailedResponse.data.Whatsapp?.connection?.state || null;
+            } catch (error) {
+                console.error(`Error fetching Bailey status for ${instanceId}:`, error.message);
+            }
+
+            // Step 4: If Bailey status is null, add to processing list
+            if (baileyStatus === null) {
+                instancesToProcess.push({
+                    instanceId,
+                    token,
+                    instance
                 });
-                results.push({ name, status: 'success' });
-            } catch (err) {
-                results.push({ name, status: 'failed', error: err.response?.data || err.message });
             }
         }
 
+        // Step 5: Process each instance: connect then logout
+        let successCount = 0;
+        let failedCount = 0;
+
+        for (const { instanceId, token } of instancesToProcess) {
+            try {
+                // Step 5a: Call connect API first
+                console.log(`Connecting instance ${instanceId} before logout...`);
+                await connectInstance(instanceId, token);
+
+                console.log(`Successfully connected ${instanceId}, now logging out...`);
+
+                // Step 5b: Immediately call logout API
+                await logoutInstance(instanceId, token);
+
+                // Step 5c: Mark offline in MongoDB
+                try {
+                    await markInstanceOffline(instanceId);
+                } catch (error) {
+                    console.error(`Failed to mark instance ${instanceId} offline:`, error.message);
+                }
+
+                results.push({
+                    instance_id: instanceId,
+                    status: 'success',
+                    message: 'Connected and logged out successfully'
+                });
+                successCount++;
+
+            } catch (error) {
+                console.error(`Failed to process instance ${instanceId}:`, error.message);
+                results.push({
+                    instance_id: instanceId,
+                    status: 'failed',
+                    error: error.response?.data || error.message
+                });
+                failedCount++;
+            }
+        }
+
+        // Step 6: Return comprehensive response
         res.status(200).json({
             success: true,
-            message: 'Logout attempted for all online instances',
+            message: `Processed ${instancesToProcess.length} instances with null Bailey status`,
             results,
+            statistics: {
+                totalInstances: codechatInstances.length,
+                onlineInstances: onlineInstances.length,
+                nullBaileyInstances: instancesToProcess.length,
+                processed: instancesToProcess.length,
+                success: successCount,
+                failed: failedCount
+            },
             timestamp: new Date().toISOString()
         });
+
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Failed to logout all instances',
-            error: error.message,
-            timestamp: new Date().toISOString()
-        });
+        console.error('Error in logout-null-bailey endpoint:', error);
+        
+        if (error.response) {
+            return res.status(error.response.status || 500).json({
+                success: false,
+                error: 'External API error',
+                message: error.response.data?.message || error.message,
+                timestamp: new Date().toISOString()
+            });
+        } else if (error.request) {
+            return res.status(503).json({
+                success: false,
+                error: 'External service unavailable',
+                message: 'Unable to connect to CODECHT API',
+                timestamp: new Date().toISOString()
+            });
+        } else {
+            return res.status(500).json({
+                success: false,
+                error: 'Internal server error',
+                message: error.message,
+                timestamp: new Date().toISOString()
+            });
+        }
     }
 });
 
 // Logout a single user by instance name
-app.delete('/logout-individual-user/:instanceId', async (req, res) => {
+app.post('/logout-instance', async (req, res) => {
     try {
-        const { instanceId } = req.params;
-
-        if (!instanceId) {
+        const { instance_id, mobile_number } = req.query;
+  
+        if (!instance_id && !mobile_number) {
             return res.status(400).json({
                 success: false,
-                message: 'instanceId is required in path params'
+                error: 'Either instance_id or mobile_number must be provided'
             });
+      }
+  
+        let user;
+        let finalInstanceId;
+        let mobileNumber;
+    
+        // Step 1: Search MongoDB user collection
+        if (instance_id) {
+            user = await User.findOne({ instance_id });
+            finalInstanceId = instance_id;
+            mobileNumber = user ? user.mobile_number : null;
+        } else {
+            user = await User.findOne({ mobile_number });
+            finalInstanceId = user ? user.instance_id : null;
+            mobileNumber = mobile_number;
         }
-
-        const instances = await fetchInstances(instanceId);
-        const instance = instances && instances[0];
-
-        if (!instance) {
+  
+        if (!user) {
             return res.status(404).json({
                 success: false,
-                message: `Instance ${instanceId} not found`
+                error: 'User not found in database'
             });
         }
-
-        const { name, connectionStatus, Auth } = instance;
-        const token = Auth && Auth.token;
-
+    
+        if (!finalInstanceId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Instance ID not found for this user'
+            });
+        }
+  
+        // Step 2: Call CODECHT API to fetch instance
+        const instancesResponse = await fetchInstances(finalInstanceId, token);
+    
+        if (!instancesResponse.data || instancesResponse.data.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'Instance not found in CODECHT API'
+            });
+        }
+  
+        const instanceData = instancesResponse.data[0];
+        const connectionStatus = instanceData.connectionStatus;
+        const token = instanceData.Auth?.token;
+    
+        // Step 3: Check if instance is ONLINE
         if (connectionStatus !== 'ONLINE') {
             return res.status(400).json({
                 success: false,
-                message: `Instance ${name} is not online (status: ${connectionStatus})`
+                error: `Instance is not ONLINE (status: ${connectionStatus})`,
+                instance_id: finalInstanceId,
+                mobile_number: mobileNumber,
+                codechat_status: connectionStatus
             });
         }
 
         if (!token) {
             return res.status(400).json({
                 success: false,
-                message: 'Missing token for the instance'
+                error: 'Missing authentication token for the instance',
+                instance_id: finalInstanceId,
+                mobile_number: mobileNumber
             });
         }
+  
+        // Step 4: Check Bailey status
+        let baileyStatus = null;
+        try {
+            const detailedResponse = await fetchInstanceDetails(finalInstanceId, token);
+            baileyStatus = detailedResponse.data.Whatsapp?.connection?.state || null;
+        } catch (error) {
+            console.error(`Error fetching Bailey status for ${finalInstanceId}:`, error.message);
+        }
+    
+        // Step 5: Check if Bailey status is null 
+        if (baileyStatus !== null) {
+            console.log(`Warning: Instance ${finalInstanceId} has Bailey status '${baileyStatus}', but proceeding with logout`);
+        }
+  
+        // Step 6: Call connect API first
+        try {
+            console.log(`Connecting instance ${finalInstanceId} before logout...`);
+            await connectInstance(finalInstanceId, token);
+            console.log(`Successfully connected ${finalInstanceId}, now logging out...`);
+        } catch (connectError) {
+            console.error(`Error connecting instance ${finalInstanceId}:`, connectError.message);
+        }
+    
+        // Step 7: Immediately call logout API
+        try {
+            await logoutInstance(finalInstanceId, token);
+            console.log(`Successfully logged out instance ${finalInstanceId}`);
+        } catch (logoutError) {
+            console.error(`Error logging out instance ${finalInstanceId}:`, logoutError.message);
+            return res.status(500).json({
+                success: false,
+                error: 'Failed to logout instance',
+                message: logoutError.response?.data || logoutError.message,
+                instance_id: finalInstanceId,
+                mobile_number: mobileNumber,
+                timestamp: new Date().toISOString()
+            });
+        }
+  
+        // Step 8: Mark offline in MongoDB
+        let markOfflineResult = null;
+        try {
+            const response = await markInstanceOffline(finalInstanceId);
+            markOfflineResult = response.status;
+            console.log(`Instance ${finalInstanceId} marked OFFLINE in MongoDB`);
+        } catch (mongoError) {
+            console.error(`Failed to update MongoDB for ${finalInstanceId}:`, mongoError.message);
+        }
 
-        await axios.delete(`${CODECHAT_URL}/instance/logout/${encodeURIComponent(name)}`, {
-            headers: {
-                'accept': 'application/json',
-                'Authorization': `Bearer ${token}`
-            }
-        });
-
-        return res.status(200).json({
+        res.status(200).json({
             success: true,
-            message: `Logout triggered for instance ${name}`,
+            message: 'Instance connected and logged out successfully',
+            instance_id: finalInstanceId,
+            mobile_number: mobileNumber,
+            previous_status: {
+                codechat_status: connectionStatus,
+                bailey_status: baileyStatus,
+                mongo_status: user.status
+            },
+            current_status: {
+                codechat_status: 'OFFLINE',
+                mongo_status: markOfflineResult
+            },
             timestamp: new Date().toISOString()
         });
     } catch (error) {
-        return res.status(500).json({
-            success: false,
-            message: 'Failed to logout individual instance',
-            error: error.response?.data || error.message,
-            timestamp: new Date().toISOString()
-        });
+        console.error('Error in logout-instance endpoint:', error);
+      
+        if (error.response) {
+            return res.status(error.response.status || 500).json({
+                success: false,
+                error: 'External API error',
+                message: error.response.data?.message || error.message,
+                timestamp: new Date().toISOString()
+            });
+        } else if (error.request) {
+            return res.status(503).json({
+                success: false,
+                error: 'External service unavailable',
+                message: 'Unable to connect to CODECHT API',
+                timestamp: new Date().toISOString()
+            });
+        } else {
+            return res.status(500).json({
+                success: false,
+                error: 'Internal server error',
+                message: error.message,
+                timestamp: new Date().toISOString()
+            });
+        }
     }
-});
+  });
 
 // Start server
 async function startServer(){
