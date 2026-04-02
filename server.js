@@ -748,6 +748,17 @@ app.post('/cleanup-memberships', async (req, res) => {
             });
         }
 
+        const expectedToken = process.env.CLEANUP_MEMBERSHIPS_X_TOKEN;
+        const rawProvidedToken = req.headers['x-token'];
+
+        if (!rawProvidedToken || String(rawProvidedToken) !== String(expectedToken)) {
+            return res.status(401).json({
+                success: false,
+                message: 'Unauthorized',
+                timestamp: new Date().toISOString()
+            });
+        }
+
         const removeAll =
             req.query.removeAll === 'true' ||
             req.query.removeAll === true ||
