@@ -7,6 +7,7 @@ const cors = require('cors');
 const connectDb = require('./config/connectDb')
 const statsRouter = require('./routes/instance')
 const User = require('./models/User')
+const mongoose = require('mongoose')
 require('dotenv').config();
 
 const app = express();
@@ -727,6 +728,127 @@ app.get('/health', (req, res) => {
 });
 
 app.use('/api/stats', statsRouter)
+
+function getMembershipMobile(doc) {
+    if (!doc) return null;
+    const v = doc.mobileNumber;
+    if (v == null) return null;
+    const s = String(v).trim();
+    return s || null;
+}
+
+app.post('/cleanup-memberships', async (req, res) => {
+    try {
+        const db = mongoose.connection.db;
+        if (!db) {
+            return res.status(503).json({
+                success: false,
+                message: 'Database not connected',
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        const removeAll =
+            req.query.removeAll === 'true' ||
+            req.query.removeAll === true ||
+            String(req.query.removeAll).toLowerCase() === 'true';
+
+        const membershipsCol = db.collection('memberships');
+        const paymentHistoryCol = db.collection('payment_history');
+
+        if (!removeAll) {
+            const mobile = req.query.mobile_number != null
+                ? String(req.query.mobile_number).trim()
+                : '';
+            if (!mobile) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'mobile_number is required when removeAll is false',
+                    timestamp: new Date().toISOString()
+                });
+            }
+
+            const memDoc = await membershipsCol.findOne({
+                mobileNumber: mobile
+            });
+
+            const userUpdate = await User.updateMany(
+                { mobile_number: mobile },
+                { $unset: { membershipId: '' } }
+            );
+
+            let membershipsDeleted = 0;
+            if (memDoc) {
+                const membershipDelete = await membershipsCol.deleteOne({ _id: memDoc._id });
+                membershipsDeleted = membershipDelete.deletedCount ?? membershipDelete.result?.n ?? 0;
+            }
+
+            const payments = await paymentHistoryCol.deleteMany(
+                { mobileNumber: mobile }
+            );
+
+            return res.status(200).json({
+                success: true,
+                removeAll: false,
+                mobile_number: mobile,
+                usersMatched: userUpdate.matchedCount ?? userUpdate.n,
+                usersModified: userUpdate.modifiedCount ?? userUpdate.nModified,
+                membershipsDeleted,
+                paymentHistoryDeleted: payments.deletedCount ?? payments.result?.n,
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        const allMemberships = await membershipsCol.find({}).toArray();
+        const results = [];
+        let skippedNoMobile = 0;
+
+        for (const mem of allMemberships) {
+            const mobile = getMembershipMobile(mem);
+            if (!mobile) {
+                skippedNoMobile += 1;
+                results.push({
+                    membershipId: mem._id,
+                    skipped: true,
+                    reason: 'no mobile_number or mobileNumber on membership'
+                });
+                continue;
+            }
+
+            await User.updateMany(
+                { mobile_number: mobile },
+                { $unset: { membershipId: '' } }
+            );
+            await membershipsCol.deleteOne({ _id: mem._id });
+            const payments = await paymentHistoryCol.deleteMany(
+                { mobileNumber: mobile }
+            );
+
+            results.push({
+                mobile_number: mobile,
+                membershipId: mem._id,
+                paymentHistoryDeleted: payments.deletedCount ?? payments.result?.n
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            removeAll: true,
+            totalMembershipsProcessed: allMemberships.length,
+            skippedNoMobile,
+            results,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('cleanup-memberships error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Error cleaning up memberships',
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
 
 // Logout all users across online instances
 app.post('/logout-all-instances', async (req, res) => {
