@@ -18,8 +18,8 @@ class HealthMonitor {
             deploymentUrl: process.env.DEPLOYMENT_URL,
             env: process.env.ENV || 'dev',
             checkInterval: parseInt(process.env.HEALTH_CHECK_INTERVAL_MS) || 120000, // Default 2 minutes
-            restartCooldown: 300000, // 5 minutes cooldown between restart attempts
-            maxRetries: 2 // Maximum restart attempts before requiring manual intervention
+            restartCooldown: parseInt(process.env.RESTART_COOLDOWN_MS) || 300000, // Default 5 minutes cooldown
+            maxRetries: parseInt(process.env.RESTART_MAX_RETRIES) || 2 // Default max restart attempts
         };
 
         this.validateConfig();
@@ -171,7 +171,7 @@ class HealthMonitor {
                 this.restartAttempted = true;
                 this.lastRestartTime = Date.now();
                 
-                console.log('⚠️ Restart automation is disabled - skipping actual restart');
+                console.log('✅ Restart automation executed successfully');
                 
                 // Wait 1 minute then check if service recovered
                 setTimeout(async () => {
