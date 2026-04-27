@@ -15,6 +15,7 @@ const PORT = process.env.PORT;
 const CODECHAT_URL = process.env.CODECHAT_URL;
 const API_KEY = process.env.API_KEY;
 const DELAY_MS = parseInt(process.env.DELAY_MS);
+const CRON_EXPRESSION = process.env.CRON_EXPRESSION || '0 */5 * * * *';
 
 // Utility function to add delay
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -447,9 +448,9 @@ async function checkAndReconnectInstances() {
     }
 }
 
-// Schedule cron job to run every 45 minutes (only if CRON_START is true)
+// Schedule cron job to run every 5 minutes (only if CRON_START is true)
 if (process.env.CRON_START === 'true') {
-    cron.schedule('0 */45 * * * *', () => {
+    cron.schedule(CRON_EXPRESSION, () => {
         checkAndReconnectInstances();
     });
 } else {
