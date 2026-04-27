@@ -41,16 +41,13 @@ RUN groupadd -r appuser && useradd -r -g appuser -G audio,video appuser \
 WORKDIR /usr/src/app
 
 # Copy package.json and package-lock.json to the container
-COPY package*.json ./
+COPY --chown=appuser:appuser package*.json ./
 
 # Install app dependencies
 RUN npm install
 
 # Copy the application code to the container
-COPY . .
-
-# Change ownership of the app directory to appuser
-RUN chown -R appuser:appuser /usr/src/app
+COPY --chown=appuser:appuser . .
 
 # Switch to non-root user
 USER appuser
